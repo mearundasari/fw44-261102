@@ -1,0 +1,89 @@
+#!/bin/bash
+
+DEVICE_ID="i2c-ELAN902C:00"
+DRIVER_PATH="/sys/bus/i2c/drivers/i2c_hid_acpi"
+DEVICE_LINK="$DRIVER_PATH/$DEVICE_ID"
+
+TARGET_USER="${SUDO_USER:-$USER}"
+TARGET_UID=$(id -u "$TARGET_USER")
+USER_ENV=(
+    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$TARGET_UID/bus"
+    "XDG_RUNTIME_DIR=/run/user/$TARGET_UID"
+)
+
+ACTION="${1:-status}"
+
+# Status check (no root elevation required)
+if [ "$ACTION" = "status" ] || [ "$ACTION" = "is-enabled" ] || [ "$ACTION" = "-s" ] || [ "$ACTION" = "--status" ]; then
+    if [ -e "$DEVICE_LINK" ]; then
+        echo "true"
+    else
+        echo "false"
+    fi
+    exit 0
+fi
+
+# Re-run with sudo if not already root
+if [ "$EUID" -ne 0 ]; then
+    exec sudo "$0" "$@"
+fi
+
+send_notification() {
+    local state="$1"
+    sudo -u "$TARGET_USER" "${USER_ENV[@]}" notify-send -i input-touchscreen -u normal "Touchscreen" "Touchscreen $state" 2>/dev/null
+}
+
+enable_touch() {
+    if [ ! -e "$DEVICE_LINK" ]; then
+        if echo "$DEVICE_ID" > "$DRIVER_PATH/bind" 2>/dev/null; then
+            echo "Status: Touchscreen ENABLED"
+            send_notification "ENABLED"
+        else
+            echo "Error: Failed to enable touchscreen." >&2
+            exit 1
+        fi
+    else
+        echo "Touchscreen is already ENABLED"
+    fi
+}
+
+disable_touch() {
+    if [ -e "$DEVICE_LINK" ]; then
+        if echo "$DEVICE_ID" > "$DRIVER_PATH/unbind" 2>/dev/null; then
+            echo "Status: Touchscreen DISABLED"
+            send_notification "DISABLED"
+        else
+            echo "Error: Failed to disable touchscreen." >&2
+            exit 1
+        fi
+    else
+        echo "Touchscreen is already DISABLED"
+    fi
+}
+
+case "$ACTION" in
+    -e|--enable|enable|on|1)
+        enable_touch
+        ;;
+    -d|--disable|disable|off|0)
+        disable_touch
+        ;;
+    -t|--toggle|toggle)
+        if [ -e "$DEVICE_LINK" ]; then
+            disable_touch
+        else
+            enable_touch
+        fi
+        ;;
+    -h|--help|help)
+        echo "Usage: its [-e|-d|-t|-h]"
+        echo "  its          Check status (outputs true/false)"
+        echo "  its -e       Enable touchscreen"
+        echo "  its -d       Disable touchscreen"
+        echo "  its -t       Toggle touchscreen state"
+        ;;
+    *)
+        echo "Usage: its [-e|-d|-t|-h]" >&2
+        exit 1
+        ;;
+esac

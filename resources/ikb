@@ -1,0 +1,91 @@
+#!/bin/bash
+
+KEYBOARD_NAME="AT Translated Set 2 keyboard"
+TARGET_USER="${SUDO_USER:-$USER}"
+TARGET_UID=$(id -u "$TARGET_USER")
+USER_ENV=(
+    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$TARGET_UID/bus"
+    "XDG_RUNTIME_DIR=/run/user/$TARGET_UID"
+)
+
+# Locate the input device node
+DEV_NODE=""
+for dev in /sys/class/input/input*; do
+    if [ -f "$dev/name" ] && grep -Fxq "$KEYBOARD_NAME" "$dev/name"; then
+        if [ -f "$dev/inhibited" ]; then
+            DEV_NODE="$dev"
+            break
+        fi
+    fi
+done
+
+if [ -z "$DEV_NODE" ]; then
+    echo "Error: Internal keyboard node not found." >&2
+    exit 1
+fi
+
+ACTION="${1:-status}"
+
+# Status check (no root elevation required)
+if [ "$ACTION" = "status" ] || [ "$ACTION" = "is-enabled" ] || [ "$ACTION" = "-s" ] || [ "$ACTION" = "--status" ]; then
+    CURRENT_STATE=$(cat "$DEV_NODE/inhibited")
+    if [ "$CURRENT_STATE" = "0" ]; then
+        echo "true"
+    else
+        echo "false"
+    fi
+    exit 0
+fi
+
+# Re-run with sudo if not already root
+if [ "$EUID" -ne 0 ]; then
+    exec sudo "$0" "$@"
+fi
+
+enable_keyboard() {
+    if echo 0 > "$DEV_NODE/inhibited"; then
+        echo "Status: Built-in keyboard ENABLED (inhibited=0)"
+        sudo -u "$TARGET_USER" "${USER_ENV[@]}" notify-send -i input-keyboard -u normal "Keyboard" "Built-in keyboard ENABLED" 2>/dev/null
+    else
+        echo "Error: Failed to enable built-in keyboard." >&2
+        exit 1
+    fi
+}
+
+disable_keyboard() {
+    if echo 1 > "$DEV_NODE/inhibited"; then
+        echo "Status: Built-in keyboard DISABLED (inhibited=1)"
+        sudo -u "$TARGET_USER" "${USER_ENV[@]}" notify-send -i input-keyboard -u normal "Keyboard" "Built-in keyboard DISABLED" 2>/dev/null
+    else
+        echo "Error: Failed to disable built-in keyboard." >&2
+        exit 1
+    fi
+}
+
+case "$ACTION" in
+    -e|--enable|enable)
+        enable_keyboard
+        ;;
+    -d|--disable|disable)
+        disable_keyboard
+        ;;
+    -t|--toggle|toggle)
+        CURRENT_STATE=$(cat "$DEV_NODE/inhibited")
+        if [ "$CURRENT_STATE" = "0" ]; then
+            disable_keyboard
+        else
+            enable_keyboard
+        fi
+        ;;
+    -h|--help|help)
+        echo "Usage: ikb [-e|-d|-t|-h]"
+        echo "  ikb          Check status (outputs true/false)"
+        echo "  ikb -e       Enable internal keyboard"
+        echo "  ikb -d       Disable internal keyboard"
+        echo "  ikb -t       Toggle internal keyboard state"
+        ;;
+    *)
+        echo "Usage: ikb [-e|-d|-t|-h]" >&2
+        exit 1
+        ;;
+esac
